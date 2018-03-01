@@ -9,7 +9,6 @@ from config import *
 from _thread import start_new_thread
 import multiprocessing
 import time
-import sys
 
 connectionDone = failure.Failure(error.ConnectionDone())
 
@@ -40,6 +39,13 @@ class TCP(Protocol, Thread):
                 self.user = data
                 self.send({"response": "auth_ok", "data": data})
                 return
+            if request == 'change':
+                if os.path.exists(os.path.join('check/', data)):
+                    self.check_img = data
+                    self.send({"response": "change_ok", "data": data})
+                    return
+                self.send({"response": "change_error", "data": 'Img dose not exist'})
+                return
             self.send({"response": "unknown_command", "data": request})
             return
 
@@ -64,7 +70,7 @@ class TCP(Protocol, Thread):
 
     def solution_starter(self):
         while True:
-            if self.receiving and (time.time() - self.last_data_receive > 2):
+            if self.receiving and (time.time() - self.last_data_receive > 2.5):
                 self.receiving = False
                 start_new_thread(self.run_solution, tuple())
             time.sleep(0.5)
@@ -77,13 +83,20 @@ class TCP(Protocol, Thread):
     def run_solution(self):
         self.solution_run = True
         pool = multiprocessing.Pool(1)
-        code = pool.apply_async(os.system, ('python solutions/' + self.user + '/' + self.user + '.py',))
-        code = code.get(self.solution_timeout)
-        if code:
-            self.solution_run = False
-            self.send({"response": "solution_error", "data": code})
-            return
-        self.check()
+        code = pool.apply_async(os.system, ('python solutions/runner.py ' + self.user,))
+        try:
+            code = code.get(self.solution_timeout)
+            if code:
+                self.send({"response": "solution_error", "data": code})
+            else:
+                self.check()
+        except multiprocessing.context.TimeoutError:
+            self.send({"response": "solution_error", "data": "Timeout"})
+        self.solution_run = False
+        with open('solutions/' + self.user + '/' + 'output', 'wb') as f:
+            f.write(b'')
+        with open('solutions/' + self.user + '/' + 'input', 'wb') as f:
+            f.write(b'')
 
     def check(self):
         with open('solutions/' + self.user + '/' + 'output', 'rb') as f:
@@ -98,12 +111,7 @@ class TCP(Protocol, Thread):
         err = (1 - errors / len(img)) * 100
         self.send({"response": "img_received", "data": round(err, 3)})
 
-        with open('solutions/' + self.user + '/' + 'output', 'wb') as f:
-            f.write(b'')
-        with open('solutions/' + self.user + '/' + 'input', 'wb') as f:
-            f.write(b'')
-
-        self.solution_run = False
+        print('%s %s' % (self.user, err))
 
     def set_mistakes(self, data):
         data = list(data)
